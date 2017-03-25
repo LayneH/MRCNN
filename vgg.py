@@ -2,38 +2,37 @@ import numpy as np
 import tensorflow as tf
 import scipy.io as sio
 import os
-os.environ['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
-os.environ['CUDA_VISIBLE_DEVICES'] = '2'
 
-def extract_vgg_feature(ims, Ws):
+def extract_vgg_feature(ims, Ws, gpu_id=None):
+    if gpu_id is not None:
+        os.environ['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
+        os.environ['CUDA_VISIBLE_DEVICES'] = gpu_id
     tf.reset_default_graph()
     g = tf.Graph()
-    with g.as_default(), tf.device('/gpu:0'):
+    with g.as_default():
         X = tf.placeholder(tf.float32, [None, 32, 32, 3])
         h = conv_relu(Ws, X, 'conv1_1')
         h = conv_relu(Ws, h, 'conv1_2')
         h = max_pool(h, 'pool1')
-        
+
         h = conv_relu(Ws, h, 'conv2_1')
         h = conv_relu(Ws, h, 'conv2_2')
         h = max_pool(h, 'pool2')
-        
+
         h = conv_relu(Ws, h, 'conv3_1')
         h = conv_relu(Ws, h, 'conv3_2')
         h = conv_relu(Ws, h, 'conv3_3')
         h = conv_relu(Ws, h, 'conv3_4')
         h = max_pool(h, 'pool3')
-        
+
         h = conv_relu(Ws, h, 'conv4_1')
         h = conv_relu(Ws, h, 'conv4_2')
         h = conv_relu(Ws, h, 'conv4_3')
         h = conv_relu(Ws, h, 'conv4_4')
         h = max_pool(h, 'pool4')
-        
+
         config = tf.ConfigProto()
         config.gpu_options.allow_growth = True
-        # config.gpu_options.per_process_gpu_memory_fraction = 0.4
-        # config.log_device_placement=True
         with tf.Session(config=config) as sess:
             sess.run(tf.global_variables_initializer())
             proc_ims = sess.run(h, feed_dict={X:ims})
@@ -53,14 +52,14 @@ def load_vgg_weights(fname='vgg/imagenet-vgg-verydeep-19.mat'):
 
         'conv5_1', 'relu5_1', 'conv5_2', 'relu5_2', 'conv5_3',
         'relu5_3', 'conv5_4', 'relu5_4'
-        
+
         'fc6', 'relu6',  'fc7', 'relu7', 'fc8'
     )
-    
+
     W = sio.loadmat(fname)
     mean_im = np.mean(W['normalization'][0][0][0], axis=(0, 1))
     weights = W['layers'][0]
-    
+
     vgg_W = {}
     for i, layer in enumerate(layers):
         if layer[:4] == 'relu' or layer[:4] == 'pool':
