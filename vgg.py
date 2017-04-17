@@ -3,6 +3,7 @@ import tensorflow as tf
 import scipy.io as sio
 import os
 from cifar_data import *
+from mani import model
 
 def load_weights_and_feats(types, gpu_id):
     vgg_W, mean_im = load_vgg_weights()
@@ -18,10 +19,7 @@ def load_vgg_feats(vgg_W, mean_im, types, feats_path='datasets/vgg_feats.npy', g
     #print feats_path
     if os.path.isfile(feats_path) == False:
         data = load_data(types)
-        for super_c in data:
-            feats[super_c] = {}
-            for c in data[super_c]:
-                feats[super_c][c] = extract_vgg_feats(data[super_c][c] - mean_im, vgg_W, gpu_id)
+        feats = extract_vgg_feats(data, mean_im, vgg_W, gpu_id)
         with open(feats_path, 'wb') as f:
             np.save(f, feats)
     else:
@@ -29,7 +27,8 @@ def load_vgg_feats(vgg_W, mean_im, types, feats_path='datasets/vgg_feats.npy', g
             feats = np.load(f).item()
     return feats
 
-def extract_vgg_feats(ims, Ws, gpu_id=None):
+def extract_vgg_feats(data, mean_im, Ws, gpu_id=None):
+    proc_ims = {}
     if gpu_id is not None:
         os.environ['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
         os.environ['CUDA_VISIBLE_DEVICES'] = gpu_id
@@ -37,31 +36,17 @@ def extract_vgg_feats(ims, Ws, gpu_id=None):
     g = tf.Graph()
     with g.as_default():
         X = tf.placeholder(tf.float32, [None, 32, 32, 3])
-        h = conv_relu(Ws, X, 'conv1_1')
-        h = conv_relu(Ws, h, 'conv1_2')
-        h = max_pool(h, 'pool1')
-
-        h = conv_relu(Ws, h, 'conv2_1')
-        h = conv_relu(Ws, h, 'conv2_2')
-        h = max_pool(h, 'pool2')
-
-        h = conv_relu(Ws, h, 'conv3_1')
-        h = conv_relu(Ws, h, 'conv3_2')
-        h = conv_relu(Ws, h, 'conv3_3')
-        h = conv_relu(Ws, h, 'conv3_4')
-        h = max_pool(h, 'pool3')
-
-        h = conv_relu(Ws, h, 'conv4_1')
-        h = conv_relu(Ws, h, 'conv4_2')
-        h = conv_relu(Ws, h, 'conv4_3')
-        h = conv_relu(Ws, h, 'conv4_4')
-        h = max_pool(h, 'pool4')
-
-        config = tf.ConfigProto()
-        config.gpu_options.allow_growth = True
-        with tf.Session(config=config) as sess:
-            sess.run(tf.global_variables_initializer())
-            proc_ims = sess.run(h, feed_dict={X:ims})
+        net = model(Ws)
+        extract_op = net.build_lower(X)
+    config = tf.ConfigProto()
+    config.gpu_options.allow_growth = True
+    with tf.Session(config=config, graph=g) as sess:
+        sess.run(tf.global_variables_initializer())
+        for super_name, super_class in data.iteritems():
+            proc_ims[super_name] = {}
+            for sub_name, ims in super_class.iteritems():
+                print 'Extracting', sub_name
+                proc_ims[super_name][sub_name] = sess.run(extract_op, feed_dict={X:ims-mean_im})
     return proc_ims
 
 def load_vgg_weights(fname='vgg/imagenet-vgg-verydeep-19.mat'):
@@ -95,27 +80,3 @@ def load_vgg_weights(fname='vgg/imagenet-vgg-verydeep-19.mat'):
         temp['W'] = np.transpose(temp['W'], (1, 0, 2, 3))
         vgg_W[layer] = temp
     return vgg_W, mean_im
-
-def conv_relu(weights, bottom, name, shape=None):
-    with tf.name_scope(name):
-        kernel, bias = get_var(weights, name)
-        conv = tf.nn.conv2d(bottom, kernel, [1, 1, 1, 1], padding='SAME')
-        conv = tf.nn.bias_add(conv, bias)
-        return tf.nn.relu(conv)
-
-def conv(weights, bottom, name, shape=None):
-    with tf.name_scope(name):
-        kernel, bias = get_var(weights, name)
-        conv = tf.nn.conv2d(bottom, kernel, [1, 1, 1, 1], padding='SAME')
-        conv = tf.nn.bias_add(conv, bias)
-        return conv
-
-def max_pool(bottom, name):
-    return tf.nn.max_pool(bottom, ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1], padding='SAME', name=name)
-
-
-def get_var(weights, name):
-    k1, k2 = weights[name]['W'], weights[name]['b'].reshape((-1, ))
-    W = tf.Variable(k1, name=name+'_W')
-    b = tf.Variable(k2, name=name+'_b')
-    return W, b

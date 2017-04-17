@@ -43,48 +43,73 @@ def get_kNN(X, k):
 
 class model(object):
     def __init__(self, W_dict):
-        self.Ws = {}
-        for i in xrange(1, 5):
-            name = 'conv5_' + str(i)
-            self.Ws[name] = W_dict[name]
+        self.Ws = W_dict
 
-    def build(self, h, t, y, Lap):
+    def build_higher(self, Xs, Xt, y, Lap):
+        # concat source and target domain for handling
+        h = tf.concat([Xs, Xt], 1)
         for i in xrange(1, 5):
             name = 'conv5_%d'%i
-            h, t = self.conv_relu(h, t, name)
+            h = self.conv_relu(h, name)
         h = self.max_pool(h, 'pool5')
-        t = self.max_pool(t, 'pool5')
-        h, t = self.fc_relu(h, t, 'fc6', shape=[512, 512])
-        h, t = self.fc_relu(h, t, 'fc7', shape=[512, 512])
-        y_pred, t = self.fc(h, t, 'fc8', shape=[512, 2])
-        t = tf.nn.softmax(t)            # normalize t
+        h = tf.nn.relu(self.fc(h, 'fc6', shape=[512, 512]))
+        h = tf.nn.relu(self.fc_relu(h, 'fc7', shape=[512, 512]))
+        y_pred = self.fc(h, 'fc8', shape=[512, 2])
+
+        # split source and target domain back
+        y_src, y_targ = tf.split(y_pred, [i.get_shape().to_list()[0] for i in [Xs, Xt]])
+        y_targ = tf.nn.softmax(y_targ)            # normalize t
 
         # accuracy
-        hit = tf.equal(tf.argmax(y_pred,1), tf.argmax(y,1))
+        hit = tf.equal(tf.argmax(y_src,1), tf.argmax(y,1))
         accuracy = tf.reduce_mean(tf.cast(hit, tf.float32))
 
         # manifold regularization, cross entropy, L2 regularization term respectively
-        mani = tf.trace(tf.matmul(tf.matmul(t, Lap, transpose_a=True), t))
-        xe = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=y_pred, labels=y))
+        mani = tf.trace(tf.matmul(tf.matmul(y_targ, Lap, transpose_a=True), y_targ))
+        xe = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=y_src, labels=y))
         reg_penalty = tf.nn.l2_loss(tf.trainable_variables()[0])
         for var in tf.trainable_variables()[1:]:
             reg_penalty += tf.nn.l2_loss(var)
         return xe, reg_penalty, mani, accuracy
 
-    def conv_relu(self, h, t, name):
+    def build_lower(self, X):
+        # conv 1
+        h = self.conv_relu(X, 'conv1_1')
+        h = self.conv_relu(h, 'conv1_2')
+        h = self.max_pool(h, 'pool1')
+
+        # conv2
+        h = self.conv_relu(h, 'conv2_1')
+        h = self.conv_relu(h, 'conv2_2')
+        h = self.max_pool(h, 'pool2')
+
+        #conv 3
+        h = self.conv_relu(h, 'conv3_1')
+        h = self.conv_relu(h, 'conv3_2')
+        h = self.conv_relu(h, 'conv3_3')
+        h = self.conv_relu(h, 'conv3_4')
+        h = self.max_pool(h, 'pool3')
+
+        #conv4
+        h = self.conv_relu(h, 'conv4_1')
+        h = self.conv_relu(h, 'conv4_2')
+        h = self.conv_relu(h, 'conv4_3')
+        h = self.conv_relu(h, 'conv4_4')
+        h = self.max_pool(h, 'pool4')
+
+        return h
+
+    def conv_relu(self, h, name):
         with tf.name_scope(name):
             kernel = tf.Variable(self.Ws[name]['W'], name="W")
             bias = tf.Variable(self.Ws[name]['b'].reshape((-1, )), name="b")
             h_conv = tf.nn.conv2d(h, kernel, [1, 1, 1, 1], padding='SAME')
-            t_conv = tf.nn.conv2d(t, kernel, [1, 1, 1, 1], padding='SAME')
-            h_ret= tf.nn.relu(tf.nn.bias_add(h_conv, bias))
-            t_ret= tf.nn.relu(tf.nn.bias_add(t_conv, bias))
-            return h_ret, t_ret
+            return tf.nn.relu(tf.nn.bias_add(h_conv, bias))
 
     def max_pool(self, bottom, name):
         return tf.nn.max_pool(bottom, ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1], padding='SAME', name=name)
 
-    def fc(self, h, t, name, shape):
+    def fc(self, h, name, shape):
         with tf.name_scope(name):
             initial = tf.truncated_normal(shape, stddev=0.01)
             W = tf.Variable(initial, name="W")
@@ -93,13 +118,4 @@ class model(object):
 
             if len(h.get_shape().as_list()) > 2:
                 h = tf.reshape(h, shape=[-1, W.get_shape().as_list()[0]])
-                t = tf.reshape(t, shape=[-1, W.get_shape().as_list()[0]])
-            h_ret = tf.nn.bias_add(tf.matmul(h, W), b)
-            t_ret = tf.nn.bias_add(tf.matmul(t, W), b)
-            return h_ret, t_ret
-
-    def fc_relu(self, h, t, name, shape):
-        h_ret, t_ret = self.fc(h, t, name, shape)
-        h_ret = tf.nn.relu(h_ret)
-        t_ret = tf.nn.relu(t_ret)
-        return h_ret, t_ret
+            return tf.nn.bias_add(tf.matmul(h, W), b)
