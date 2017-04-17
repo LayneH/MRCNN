@@ -1,11 +1,12 @@
 import numpy as np
 import os
+import time
 from argparse import ArgumentParser
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import tensorflow as tf
-from cifar_data import *
-from mani import *
-from vgg import load_vgg_weights, extract_vgg_feature
+from vgg import load_weights_and_feats
+from mani import load_lap, model
+from cifar_data import get_XY, data_holder
 
 types = ["fruit_and_vegetables", "household_electrical_devices"]
 VGG_PATH = 'vgg/imagenet-vgg-verydeep-19.mat'
@@ -14,50 +15,22 @@ RESULT_PATH = 'result.csv'
 ALPHA = 1e-4
 BETA = 1e-2
 K = 3
-LEARNING_RATE = 10**2.5
+LEARNING_RATE = 10**-2.5
 ITERATION = 200
-VERBOSE = 50
+VERBOSE = 0
+EPOCHS_PER_DECAY = 20
 
 def get_parser():
     parser = ArgumentParser()
-    parser.add_argument('--vgg_path', dest='vgg', metavar='VGG_PATH',
+    parser.add_argument('--vgg_path', dest='vgg_path', metavar='VGG_PATH',
         help='directory of pretrained VGG Net', default=VGG_PATH)
     parser.add_argument('--result_path', dest='out_file', metavar='RESULT_PATH',
         help='file that save the result', default=RESULT_PATH)
     parser.add_argument('--gpu_id', dest='gpu_id', metavar='GPU_ID',
-        help='select GPU devices to use', default=None)
+        help='select GPU devices to use', default='0')
     return parser
 
-def load_vgg_feats(vgg_W, mean_im, feats_path='vgg_feats.npy'):
-    feats = {}
-    if !os.isfile(feats_path):
-        data = load_data()
-        for super_c in data:
-            feats[super_c] = {}
-            for c in data[super_c]:
-                feats[super_c][c] = extract_vgg_feature(data[super_c][c] - mean_im, vgg_W)
-        with open(feats_path, 'wb') as f:
-            lap = np.save(f)
-    else:
-        with open(feats_path, 'rb') as f:
-            feats = np.load(f).item()
-    return feats
-
-def load_lap(data, lap_path='lap.npy'):
-    lap = {}
-    if !os.isfile(lap_path):
-        for i, pos in data[types[0]].iteritems():
-            for j, neg in data[types[1]].iteritems():
-                M = get_kNN(np.concatenate((pos, neg), axis=0), k)
-                lap['%s-%s'%(i, j)] = np.diag(np.sum(M, axis=1)) - M
-        with open(lap_path, 'wb') as f:
-            lap = np.save(f)
-    else:
-        with open(lap_path, 'rb') as f:
-            lap = np.load(f).item()
-    return lap
-
-def get_problems():
+def get_problems(data):
     problems = []
     for pos1 in data[types[0]]:
         for pos2 in data[types[0]]:
@@ -77,13 +50,13 @@ def train_and_test(src, targ, Ws, Lap, param={}):
     targ - target domain data
     '''
     # get keywords
-    alpha = param.pop('alpha', 0.1)
-    beta = param.pop('beta', 1)
-    lr = param.pop('lr', 1e-5)
-    max_steps = param.pop('steps', 500)
-    epochs_per_decay = param.pop('epochs_per_decay', 10)
-    verbose = param.pop('verbose', 0)
-    k = param.pop('k', 10)
+    alpha = param.pop('alpha', ALPHA)
+    beta = param.pop('beta', BETA)
+    k = param.pop('k', K)
+    lr = param.pop('lr', LEARNING_RATE)
+    max_steps = param.pop('steps', ITERATION)
+    verbose = param.pop('verbose', VERBOSE)
+    epochs_per_decay = param.pop('epochs_per_decay', EPOCHS_PER_DECAY)
 
     tf.reset_default_graph()
     g = tf.Graph()
@@ -93,16 +66,16 @@ def train_and_test(src, targ, Ws, Lap, param={}):
         y_src = tf.placeholder(tf.float32, [None, 2])
 
         # build the model
-        net = vgg_upper(Ws)
-        xe, reg_penalty, mani, acc_op = net.vgg_trans(x_src, x_targ, y_src, Lap)
+        net = model(Ws)
+        xe, reg_penalty, mani, acc_op = net.build(x_src, x_targ, y_src, Lap)
 
         # overall loss
-        loss_op = tf.multiply(alpha, mani) + tf.multiply(beta, xe) + tf.multiply(gamma, reg_penalty)
+        loss_op = xe + tf.multiply(alpha, mani) + tf.multiply(beta, reg_penalty)
 
         # decay the learning rate
         global_step = tf.Variable(0)
-        learning_rate = tf.train.exponential_decay(lr, global_step*batch_size,
-                                               epochs_per_decay*src.size, 0.5,staircase=True)
+        learning_rate = tf.train.exponential_decay(lr, global_step,
+                            epochs_per_decay, 0.5,staircase=True)
 
         # here we apply smaller learning rate on conv5 layers
         var_list1 = tf.trainable_variables()[:8]
@@ -137,33 +110,37 @@ def main():
     parser = get_parser()
     option = parser.parse_args()
 
-    assert os.isfile(option.vgg_path), "You may forget to download pretrained\
-                                        VGG Net, or please specify the model path\
-                                        by --vgg_path option if you have the\
-                                        model already."
+    assert os.path.isfile(option.vgg_path), "You may forget to download pretrained "\
+                                        "VGG Net, or please specify the model path "\
+                                        "by --vgg_path option if you have the "\
+                                        "model already."
     if option.gpu_id is not None:
         os.environ['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
-        os.environ['CUDA_VISIBLE_DEVICES'] = opt.gpu_id
-    vgg_W, mean_im = load_vgg_weights()
-    feats = load_vgg_feats(vgg_W, mean_im)
-    lap = load_lap(feats)
-    problems = get_problems()
+        os.environ['CUDA_VISIBLE_DEVICES'] = option.gpu_id
+    Ws, feats = load_weights_and_feats(types, option.gpu_id)
+    lap = load_lap(feats, K, types)
+    problems = get_problems(feats)
     acc = np.zeros((len(problems), ))
-    param={'lr':LEARNING_RATE, 'alpha':ALPHA, 'beta':BETA, 'k':K,
-        'steps':ITERATION, 'verbose':VERBOSE, 'epochs_per_decay':20}
+    # param={'lr':LEARNING_RATE, 'alpha':ALPHA, 'beta':BETA, 'k':K,
+    # 'steps':ITERATION, 'verbose':VERBOSE, 'epochs_per_decay':EPOCHS_PER_DECAY}
+    start = time.time()
+    last_start = start
     for i, problem in enumerate(problems):
+        print '%4d / %4d, %s'%(i+1, len(problem), problem)
         pos1, neg1, _, pos2, neg2 = problem.split('-')
-        X_s, y_s = get_XY(feat[types[0]][pos1], feat[types[1]][neg1])
-        X_t, y_t = get_XY(feat[types[0]][pos2], feat[types[1]][neg2])
+        X_s, y_s = get_XY(feats[types[0]][pos1], feats[types[1]][neg1])
+        X_t, y_t = get_XY(feats[types[0]][pos2], feats[types[1]][neg2])
         src = data_holder(X_s, y_s)
         targ = data_holder(X_t, y_t)
-        acc[i] = train_and_test(src, targ, param)
-        print '%d / %d, %s, accuracy is'%(i+1, len(problem), problem, acc[i])
+        acc[i] = train_and_test(src, targ, Ws, lap['%s-%s'%(pos2, neg2)])
+        last_end = time.time()
+        print 'Takes %4.2f s, accuracy is %3.4f'%(last_end-last_start, acc[i])
+        last_start = last_end
         with open(option.out_file, 'wb') as f:
             np.savetxt(f, acc*100, delimiter=',', fmt='%.4f')
-    duration = end - start
+    duration = time.time() - start
     print 'Average accuracy is ', np.mean(acc)
-    print '%d problems take %fs'%(len(problems), duration)
+    print '%d problems take %f s'%(len(problems), duration)
 
 if __name__ == '__main__':
     main()

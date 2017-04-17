@@ -1,7 +1,21 @@
 import numpy as np
+import os
 import numpy.linalg as la
 import tensorflow as tf
 
+def load_lap(data, k, types, lap_path='datasets/lap.npy'):
+    lap = {}
+    if os.path.isfile(lap_path) == False:
+        for i, pos in data[types[0]].iteritems():
+            for j, neg in data[types[1]].iteritems():
+                M = get_kNN(np.concatenate((pos, neg), axis=0), k)
+                lap['%s-%s'%(i, j)] = np.diag(np.sum(M, axis=1)) - M
+        with open(lap_path, 'wb') as f:
+            np.save(f, lap)
+    else:
+        with open(lap_path, 'rb') as f:
+            lap = np.load(f).item()
+    return lap
 
 def get_kNN(X, k):
     '''
@@ -27,32 +41,31 @@ def get_kNN(X, k):
     return M
 
 
-class vgg_upper(object):
-    def __init__(self, W_dict, fc_dims=[512, 10]):
-        self.fc_dims = fc_dims
+class model(object):
+    def __init__(self, W_dict):
         self.Ws = {}
         for i in xrange(1, 5):
             name = 'conv5_' + str(i)
             self.Ws[name] = W_dict[name]
 
-    def vgg_trans(self, h, t, y, Lap):
+    def build(self, h, t, y, Lap):
         for i in xrange(1, 5):
             name = 'conv5_%d'%i
             h, t = self.conv_relu(h, t, name)
         h = self.max_pool(h, 'pool5')
         t = self.max_pool(t, 'pool5')
-        h, t = self.fc_relu(h, t, 'fc6', shape=[512, self.fc_dims[0]])
-        h, t = self.fc_relu(h, t, 'fc7', shape=[self.fc_dims[0], self.fc_dims[1]])
-        y_pred, t = self.fc(h, t, 'fc8', shape=[self.fc_dims[1], 2])
-        t = tf.nn.softmax(t)
+        h, t = self.fc_relu(h, t, 'fc6', shape=[512, 512])
+        h, t = self.fc_relu(h, t, 'fc7', shape=[512, 512])
+        y_pred, t = self.fc(h, t, 'fc8', shape=[512, 2])
+        t = tf.nn.softmax(t)            # normalize t
 
         # accuracy
         hit = tf.equal(tf.argmax(y_pred,1), tf.argmax(y,1))
         accuracy = tf.reduce_mean(tf.cast(hit, tf.float32))
 
-        # loss
+        # manifold regularization, cross entropy, L2 regularization term respectively
         mani = tf.trace(tf.matmul(tf.matmul(t, Lap, transpose_a=True), t))
-        xe = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(y_pred, y))
+        xe = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=y_pred, labels=y))
         reg_penalty = tf.nn.l2_loss(tf.trainable_variables()[0])
         for var in tf.trainable_variables()[1:]:
             reg_penalty += tf.nn.l2_loss(var)

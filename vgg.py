@@ -2,8 +2,34 @@ import numpy as np
 import tensorflow as tf
 import scipy.io as sio
 import os
+from cifar_data import *
 
-def extract_vgg_feature(ims, Ws, gpu_id=None):
+def load_weights_and_feats(types, gpu_id):
+    vgg_W, mean_im = load_vgg_weights()
+    feats = load_vgg_feats(vgg_W, mean_im, types, gpu_id=gpu_id)
+    Ws = {}
+    for i in xrange(1, 5):
+        layer = 'conv5_%d'%i
+        Ws[layer] = vgg_W[layer]
+    return Ws, feats
+
+def load_vgg_feats(vgg_W, mean_im, types, feats_path='datasets/vgg_feats.npy', gpu_id=None):
+    feats = {}
+    #print feats_path
+    if os.path.isfile(feats_path) == False:
+        data = load_data(types)
+        for super_c in data:
+            feats[super_c] = {}
+            for c in data[super_c]:
+                feats[super_c][c] = extract_vgg_feats(data[super_c][c] - mean_im, vgg_W, gpu_id)
+        with open(feats_path, 'wb') as f:
+            np.save(f, feats)
+    else:
+        with open(feats_path, 'rb') as f:
+            feats = np.load(f).item()
+    return feats
+
+def extract_vgg_feats(ims, Ws, gpu_id=None):
     if gpu_id is not None:
         os.environ['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
         os.environ['CUDA_VISIBLE_DEVICES'] = gpu_id
