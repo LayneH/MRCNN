@@ -74,12 +74,12 @@ class data_holder(object):
         self._labels = labels
 
     @property
-    def images(self):
-        return self._images
-
-    @property
     def labels(self):
         return self._labels
+
+    @property
+    def images(self):
+        return self._images
 
     @property
     def size(self):

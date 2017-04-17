@@ -67,7 +67,7 @@ def train_and_test(src, targ, Ws, Lap, param={}):
 
         # build the model
         net = model(Ws)
-        xe, reg_penalty, mani, acc_op = net.build(x_src, x_targ, y_src, Lap)
+        xe, reg_penalty, mani, acc_op = net.build_higher(x_src, x_targ, y_src, Lap)
 
         # overall loss
         loss_op = xe + tf.multiply(alpha, mani) + tf.multiply(beta, reg_penalty)
@@ -124,9 +124,9 @@ def main():
     # param={'lr':LEARNING_RATE, 'alpha':ALPHA, 'beta':BETA, 'k':K,
     # 'steps':ITERATION, 'verbose':VERBOSE, 'epochs_per_decay':EPOCHS_PER_DECAY}
     start = time.time()
-    last_start = start
     for i, problem in enumerate(problems):
-        print '%4d / %4d, %s'%(i+1, len(problem), problem)
+        last_start = time.time()
+        print '[%4d / %4d], %s:'%(i+1, len(problems), problem)
         pos1, neg1, _, pos2, neg2 = problem.split('-')
         X_s, y_s = get_XY(feats[types[0]][pos1], feats[types[1]][neg1])
         X_t, y_t = get_XY(feats[types[0]][pos2], feats[types[1]][neg2])
@@ -134,8 +134,7 @@ def main():
         targ = data_holder(X_t, y_t)
         acc[i] = train_and_test(src, targ, Ws, lap['%s-%s'%(pos2, neg2)])
         last_end = time.time()
-        print 'Takes %4.2f s, accuracy is %3.4f'%(last_end-last_start, acc[i])
-        last_start = last_end
+        print '\tTakes %4.2f s, accuracy is %3.4f'%(last_end-last_start, acc[i])
         with open(option.out_file, 'wb') as f:
             np.savetxt(f, acc*100, delimiter=',', fmt='%.4f')
     duration = time.time() - start

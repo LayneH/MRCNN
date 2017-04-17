@@ -43,22 +43,24 @@ def get_kNN(X, k):
 
 class model(object):
     def __init__(self, W_dict):
-        self.Ws = W_dict
+        self.Ws =W_dict
+        self.layers = {}
 
     def build_higher(self, Xs, Xt, y, Lap):
         # concat source and target domain for handling
-        h = tf.concat([Xs, Xt], 1)
+        h, t = Xs, Xt
         for i in xrange(1, 5):
             name = 'conv5_%d'%i
             h = self.conv_relu(h, name)
+            t = self.conv_relu(t, name)
         h = self.max_pool(h, 'pool5')
+        t = self.max_pool(t, 'pool5')
         h = tf.nn.relu(self.fc(h, 'fc6', shape=[512, 512]))
-        h = tf.nn.relu(self.fc_relu(h, 'fc7', shape=[512, 512]))
-        y_pred = self.fc(h, 'fc8', shape=[512, 2])
-
-        # split source and target domain back
-        y_src, y_targ = tf.split(y_pred, [i.get_shape().to_list()[0] for i in [Xs, Xt]])
-        y_targ = tf.nn.softmax(y_targ)            # normalize t
+        t = tf.nn.relu(self.fc(t, 'fc6', shape=[512, 512]))
+        h = tf.nn.relu(self.fc(h, 'fc7', shape=[512, 512]))
+        t = tf.nn.relu(self.fc(t, 'fc7', shape=[512, 512]))
+        y_src = self.fc(h, 'fc8', shape=[512, 2])
+        y_targ = tf.nn.softmax(self.fc(t, 'fc8', shape=[512, 2])) # normalize it
 
         # accuracy
         hit = tf.equal(tf.argmax(y_src,1), tf.argmax(y,1))
@@ -99,10 +101,24 @@ class model(object):
 
         return h
 
+    def get_variables(self, name, shape=None):
+        if name not in self.layers:
+            self.layers[name] = {}
+            if name[:2] == 'fc':
+                assert shape is not None, 'Shape should not be None'
+                initial = tf.truncated_normal(shape, stddev=0.01)
+                self.layers[name]['W'] = tf.Variable(initial, name="W")
+                initial = tf.truncated_normal(shape[1:], stddev=0.01)
+                self.layers[name]['b'] = tf.Variable(initial, name="b")
+            else:
+                self.layers[name]['W'] = tf.Variable(self.Ws[name]['W'], name="W")
+                self.layers[name]['b'] = tf.Variable(self.Ws[name]['b'].reshape((-1, )), name="b")
+        return self.layers[name]['W'], self.layers[name]['b']
+
+
     def conv_relu(self, h, name):
         with tf.name_scope(name):
-            kernel = tf.Variable(self.Ws[name]['W'], name="W")
-            bias = tf.Variable(self.Ws[name]['b'].reshape((-1, )), name="b")
+            kernel, bias = self.get_variables(name)
             h_conv = tf.nn.conv2d(h, kernel, [1, 1, 1, 1], padding='SAME')
             return tf.nn.relu(tf.nn.bias_add(h_conv, bias))
 
@@ -111,10 +127,7 @@ class model(object):
 
     def fc(self, h, name, shape):
         with tf.name_scope(name):
-            initial = tf.truncated_normal(shape, stddev=0.01)
-            W = tf.Variable(initial, name="W")
-            initial = tf.truncated_normal(shape[1:], stddev=0.01)
-            b = tf.Variable(initial, name="b")
+            W, b = self.get_variables(name, shape=shape)
 
             if len(h.get_shape().as_list()) > 2:
                 h = tf.reshape(h, shape=[-1, W.get_shape().as_list()[0]])
