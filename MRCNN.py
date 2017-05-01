@@ -12,7 +12,7 @@ types = ["fruit_and_vegetables", "household_electrical_devices"]
 VGG_PATH = 'vgg/imagenet-vgg-verydeep-19.mat'
 RESULT_PATH = 'result.csv'
 
-ALPHA = 1e-4
+ALPHA = 1e-5
 BETA = 1e-2
 K = 3
 LEARNING_RATE = 10**-2.5
