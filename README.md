@@ -25,7 +25,7 @@ Use `--vgg_path` to specify the path of pretrained VGG Net. By default, the mode
 
 Use `--result_path` to specify file to save the result. By default, the file is "result.csv".
 
-Use `--help` to aquire more information.
+Use `--help` to acquire more information.
 
 ---
 ## Citation
